@@ -1,5 +1,6 @@
-import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
+import 'package:flutter/material.dart'; // Flutterの基本的なUI部品を使うために必要な宣言
+import 'package:webview_flutter/webview_flutter.dart'; // WebView（ブラウザ）を使うために必要な宣言
+import 'package:shared_preferences/shared_preferences.dart'; // データを端末に保存するために必要な宣言
 
 // アプリの起動スイッチです。ここからすべてが始まります。
 void main() {
@@ -63,9 +64,9 @@ class _MainScreenState extends State<MainScreen> {
       
       // 画面の真ん中のメイン部分
       // 選ばれたタブの番号（_selectedIndex）を見て、表示する画面を切り替えます
-      body: _selectedIndex == 0
+            body: _selectedIndex == 0
           ? const PortalScreen() // 0なら「サイト一覧画面」を表示
-          : const Center(child: Text('ここに保存した小説の一覧（本棚）を表示します')), // 1なら「本棚」を表示
+          : const BookshelfScreen(), // 1なら上で新しく作った「本棚画面」を表示！
           
       // 画面の下の切り替えタブ（BottomNavigationBar）
       bottomNavigationBar: BottomNavigationBar(
@@ -200,17 +201,144 @@ class _BrowserScreenState extends State<BrowserScreen> {
       // 画面の真ん中は、ブラウザ本体を表示
       body: WebViewWidget(controller: _controller),
       
-      // 画面の右下に浮かぶ丸いボタン（ダウンロードボタン）
+            // 画面の右下に浮かぶ丸いボタン
+            // 画面の右下に浮かぶ丸いボタン
       floatingActionButton: FloatingActionButton(
-        // ボタンが押された時の処理
-        onPressed: () {
-          // 画面の下から、短いメッセージ（SnackBar）を表示する
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('将来ここにダウンロード機能がつきます！')),
-          );
+        onPressed: () async {
+          // 1. スナイパー（JavaScript）への命令文を作成する
+          // 「novel_subtitle（サブタイトル）」と「novel_honbun（本文）」の箱を狙撃します
+           final jsCode = '''
+            (function() {
+              // ① サブタイトルの箱をいろんな名前で探す
+              var subtitleElement = document.querySelector('.novel_subtitle') 
+                                 || document.querySelector('.p-novel__title--episode')
+                                 || document.querySelector('.novel_title')
+                                 || document.querySelector('.episode_title');
+                                 
+              // 見つからなければ、「ページ全体のタイトル」をサブタイトルとして代用する！
+              var subtitleText = subtitleElement ? subtitleElement.innerText : document.title;
+                          
+              // ② 本文の箱を探す
+              var honbunElement = document.getElementById('novel_honbun') 
+                               || document.querySelector('.js-novel-text')
+                               || document.querySelector('.p-novel__body');
+              
+              // 本文すら無ければエラー
+              if (!honbunElement) return "エラー: 小説の本文が見つかりません！";
+              // ③ 無事に両方揃ったら、合体させて返す！
+              return subtitleText + "|||\\n\\n" + honbunElement.innerText;
+            })();
+          ''';
+          
+          // 2. ブラウザに命令を送り込んで、結果（文字データ）を受け取る！
+          final result = await _controller.runJavaScriptReturningResult(jsCode);
+          
+          // 3. 受け取ったデータから、余計な記号を掃除して綺麗な文章にする
+          final cleanText = result.toString().replaceAll('"', '').replaceAll(r'\n', '\n');
+          
+          // 4. 抽出した文字を、画面の真ん中にポップアップ（ダイアログ）でドーンと表示する！
+          if (context.mounted) {
+            showDialog(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('🎯 抽出成功！'),
+                content: SingleChildScrollView(
+                  child: Text(cleanText), // 抜き出した文字を表示！
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('閉じる'),
+                  ),
+                ],
+              ),
+            );
+          }
         },
-        child: const Icon(Icons.download), // ダウンロードのアイコン画像
+        child: const Icon(Icons.get_app), // アイコンをダウンロード矢印に変更
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------
+// 4. 「本棚画面」（保存したデータを読み込んで一覧表示する画面）
+// ---------------------------------------------------
+class BookshelfScreen extends StatefulWidget {
+  const BookshelfScreen({super.key});
+
+  @override
+  State<BookshelfScreen> createState() => _BookshelfScreenState();
+}
+
+class _BookshelfScreenState extends State<BookshelfScreen> {
+  // 読み込んだデータを一時的に入れておく箱
+  List<String> _bookmarks = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBookmarks(); // 画面が開かれた時に、記憶装置からデータを読み込む
+  }
+
+  // 記憶装置からデータを引っ張り出してくる処理
+  Future<void> _loadBookmarks() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      // 記憶装置からリストを取り出す。無ければ空っぽにする。
+      _bookmarks = prefs.getStringList('my_bookmarks') ?? [];
+    });
+  }
+
+  // 本棚から項目を消す（削除）処理
+  Future<void> _deleteBookmark(int index) async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _bookmarks.removeAt(index); // リストから指定された番号のものを消す
+    });
+    await prefs.setStringList('my_bookmarks', _bookmarks); // 消した後のリストを上書きセーブ
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // まだ1つも保存されていない場合の画面
+    if (_bookmarks.isEmpty) {
+      return const Center(child: Text('まだ本棚には何もありません。'));
+    }
+
+    // 保存されているデータをリストにして表示する
+    return ListView.builder(
+      itemCount: _bookmarks.length,
+      itemBuilder: (context, index) {
+        // 保存されている "タイトル|URL" という文字列を、「|」の記号で真っ二つに割る
+        final data = _bookmarks[index].split('|');
+        final title = data[0]; // 前半がタイトル
+        final url = data.length > 1 ? data[1] : ''; // 後半がURL
+
+        return Card(
+          child: ListTile(
+            leading: const Icon(Icons.bookmark, color: Colors.deepPurple),
+            title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis), // タイトルが長すぎたら「...」にする
+            subtitle: Text(url, maxLines: 1, overflow: TextOverflow.ellipsis),
+            
+            // タップしたら、またブラウザ画面を呼び出して続きを読む！
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => BrowserScreen(siteName: title, url: url),
+                ),
+              );
+            },
+            
+            // ゴミ箱ボタン（押したら消える）
+            trailing: IconButton(
+              icon: const Icon(Icons.delete, color: Colors.grey),
+              onPressed: () => _deleteBookmark(index),
+            ),
+          ),
+        );
+      },
     );
   }
 }
